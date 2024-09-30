@@ -1,0 +1,106 @@
+pipeline {
+
+    agent {
+        docker {
+            image 'ra53n/android:1.0.0'
+        }
+    }
+
+    parameters {
+        string(name: "BRANCH", defaultValue: "development", description: "Select branch")
+    }
+
+    stages {
+
+        stage('clone'){
+            steps {
+                checkout([
+                    $class: 'GitSCM',
+                    branches: [[name: params.BRANCH]],
+                    userRemoteConfigs: [[url: 'https://github.com/antonkazakov/TotalCoverage.git']]
+                ])
+            }
+        }
+
+        stage('detekt') {
+            steps {
+                sh './gradlew detekt'
+            }
+            post {
+                failure {
+                    archiveArtifacts artifacts: 'app/build/reports/detekt/*', allowEmptyArchive: true
+                }
+            }
+        }
+
+        stage('build debug') {
+            when {
+                expression {
+                    params.branch.startsWith("feature/")
+                }
+                expression {
+                    params.branch.startsWith("bugfix/")
+                }
+            }
+            steps {
+                sh './gradlew assembleDebug'
+            }
+        }
+
+        stage('debug build Unit tests') {
+            when {
+                expression {
+                    params.branch.startsWith("feature/")
+                }
+                expression {
+                    params.branch.startsWith("bugfix/")
+                }
+            }
+            steps {
+                sh './gradlew testDebugUnitTest'
+            }
+            post {
+                failure {
+                    archiveArtifacts artifacts: 'app/build/test-results/testDebugUnitTest/*.xml', allowEmptyArchive: true
+                }
+            }
+        }
+
+        stage('build release') {
+            when {
+                expression {
+                    params.branch.startsWith("release/")
+                }
+            }
+            steps {
+                withCredentials(
+                    [
+                        file(credentialsId: 'otus_keystore', variable: 'otus_keystore_file'),
+                        file(credentialsId: 'otus_keystore_credentials', variable: 'otus_keystore_credentials_file')
+                    ]
+                ) {
+                    sh 'cp -f ${otus_keystore_file} stepsKeystore.jks'
+                    sh 'cp -f ${otus_keystore_credentials_file} keystore.properties'
+                }
+                sh './gradlew assembleRelease'
+            }
+        }
+
+        stage('release build Unit tests + Integration tests') {
+            when {
+                expression {
+                    params.branch.startsWith("release/")
+                }
+            }
+            steps {
+                sh './gradlew testReleaseUnitTest'
+            }
+            post {
+                failure {
+                    archiveArtifacts artifacts: 'app/build/test-results/testReleaseUnitTest/*.xml', allowEmptyArchive: true
+                }
+            }
+        }
+
+    }
+}
